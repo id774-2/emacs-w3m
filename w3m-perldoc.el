@@ -1,6 +1,7 @@
 ;;; w3m-perldoc.el --- The add-on program to view Perl documents.
 
-;; Copyright (C) 2001, 2002, 2003 TSUCHIYA Masatoshi <tsuchiya@namazu.org>
+;; Copyright (C) 2001, 2002, 2003, 2004, 2005, 2007
+;; TSUCHIYA Masatoshi <tsuchiya@namazu.org>
 
 ;; Author: TSUCHIYA Masatoshi <tsuchiya@namazu.org>
 ;; Keywords: w3m, perldoc
@@ -18,9 +19,9 @@
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program; if not, you can either send email to this
-;; program's maintainer or write to: The Free Software Foundation,
-;; Inc.; 59 Temple Place, Suite 330; Boston, MA 02111-1307, USA.
+;; along with this program; see the file COPYING.  If not, write to
+;; the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
 
 
 ;;; Commentary:
@@ -57,7 +58,7 @@
 	 (delq nil (delete "" (mapcar (lambda (x) (if (stringp x) x))
 				      (default-value symbol)))))
   :set (lambda (symbol value)
-	 (set-default
+	 (custom-set-default
 	  symbol
 	  (delq nil (delete "" (mapcar (lambda (x) (if (stringp x) x))
 				       value))))))
@@ -93,8 +94,6 @@
 				  nil t nil "-u" docname)))
 	   (let ((coding-system-for-write w3m-perldoc-input-coding-system)
 		 (coding-system-for-read w3m-perldoc-input-coding-system))
-	     (w3m-static-if (featurep 'xemacs)
-		 (goto-char (point-max)))
 	     (zerop (apply (function call-process-region)
 			   (point-min) (point-max)
 			   w3m-perldoc-pod2html-command

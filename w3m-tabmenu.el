@@ -1,6 +1,6 @@
 ;;; w3m-tabmenu.el --- Functions for TAB menu browsing
 
-;; Copyright (C) 2001, 2002, 2003, 2004, 2005
+;; Copyright (C) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2009
 ;; TSUCHIYA Masatoshi <tsuchiya@namazu.org>
 
 ;; Authors: Hideyuki SHIRAI    <shirai@meadowy.org>,
@@ -20,9 +20,9 @@
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program; if not, you can either send email to this
-;; program's maintainer or write to: The Free Software Foundation,
-;; Inc.; 59 Temple Place, Suite 330; Boston, MA 02111-1307, USA.
+;; along with this program; see the file COPYING.  If not, write to
+;; the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
 
 ;;; Commentary:
 
@@ -40,19 +40,18 @@
 (require 'w3m)
 (require 'easymenu)
 
-(defvar w3m-tab-menubar-dummy
-  '("TAB"
-    ["dummy" w3m-switch-buffer t]))
-
 (defun w3m-setup-tab-menu ()
   "Setup w3m tab menubar."
   (when w3m-use-tab-menubar
-    (unless (lookup-key w3m-mode-map [menu-bar w3m-tab])
-      (w3m-static-if (featurep 'xemacs)
-	  (progn
-	    (set-buffer-menubar (cons w3m-tab-menubar-dummy current-menubar))
-	    (add-hook 'activate-menubar-hook 'w3m-tab-menubar-update))
-	(define-key w3m-mode-map [menubar w3m-tab] w3m-tab-menubar-dummy)
+    (w3m-static-if (featurep 'xemacs)
+	(unless (car (find-menu-item current-menubar '("Tab")))
+	  (easy-menu-define w3m-tab-menu w3m-mode-map
+	    "" '("Tab" ["dummy" w3m-switch-buffer t]))
+	  (easy-menu-add w3m-tab-menu)
+	  (add-hook 'activate-menubar-hook 'w3m-tab-menubar-update))
+      (unless (lookup-key w3m-mode-map [menu-bar Tab])
+	(easy-menu-define w3m-tab-menu w3m-mode-map "" '("Tab"))
+	(easy-menu-add w3m-tab-menu)
 	(add-hook 'menu-bar-update-hook 'w3m-tab-menubar-update)))))
 
 (defun w3m-switch-buffer ()
@@ -93,45 +92,96 @@
   (when (get-buffer buf)
     (switch-to-buffer buf)))
 
-;;; w3m-tabmenu.el ends here
-;; Silence the byte compiler.  `w3m-tab-menubar-update' uses it to
-;; disable the iswitchb keymap, but it will never be used in Emacs 19
-;; since the Emacs version in which iswitchb.el appeared is 20.1.
-(eval-when-compile
-  (autoload 'easy-menu-remove-item "easymenu"))
-
 (defun w3m-tab-menubar-update ()
   "Update w3m tab menubar."
-  (when (and (boundp 'iswitchb-global-map)
-	     (keymapp (symbol-value 'iswitchb-global-map)))
-    ;; Don't let iswitchb manage the w3m tab menubar.
-    (easy-menu-remove-item (symbol-value 'iswitchb-global-map)
-			   '(menu-bar)
-			   (car w3m-tab-menubar-dummy)))
   (when (and (eq major-mode 'w3m-mode)
 	     (w3m-static-if (featurep 'xemacs)
 		 (frame-property (selected-frame) 'menubar-visible-p)
 	       menu-bar-mode))
-    (easy-menu-change nil
-		      (car w3m-tab-menubar-dummy)
-		      (w3m-tab-menubar-make-items))))
+    (easy-menu-define w3m-tab-menu w3m-mode-map
+      "The menu kepmap for the emacs-w3m tab."
+      (cons "Tab" (w3m-tab-menubar-make-items)))
+    (w3m-static-when (featurep 'xemacs)
+      (let ((items (car (find-menu-item current-menubar '("Tab")))))
+	(when items
+	  (setcdr items (cdr w3m-tab-menu))
+	  (set-buffer-menubar current-menubar))))))
 
-(defun w3m-tab-menubar-make-items (&optional nomenu)
-  "Create w3m tab menu items."
-  (let ((i 0) (current (current-buffer)))
+(defvar w3m-tab-menubar-items-sub-coeff 30) ;; 30?
+(defvar w3m-tab-menubar-items-width 50) ;; 50?
+
+(defun w3m-tab-menubar-make-items-1 (buffers &optional nomenu)
+  (let ((i 0)
+	(current (current-buffer))
+	(width w3m-tab-menubar-items-width)
+	title unseen)
     (mapcar
      (lambda (buffer)
        (if nomenu
 	   (list (buffer-name buffer)
-		 (w3m-buffer-title buffer)
-		 (eq buffer current))
-	 (vector (format "%d: %s%s"
-			 (incf i)
-			 (if (eq buffer current) "* " "  ")
+		 (format "%s%s"
+			 (if (w3m-unseen-buffer-p buffer) "(u)" "")
 			 (w3m-buffer-title buffer))
+		 (eq buffer current))
+	 (setq title (w3m-buffer-title buffer))
+	 (setq unseen (w3m-unseen-buffer-p buffer))
+	 (when (>= (string-width title) width)
+	   (setq title
+		 (concat (w3m-truncate-string title
+					      (- width 3))
+			 "...")))
+	 (vector (format "%d:%s%s"
+			 (incf i)
+			 (cond ((eq buffer current) "* ")
+			       (unseen "u ")
+			       (t "  "))
+			 title)
 		 `(w3m-tab-menubar-open-item ,(buffer-name buffer))
 		 buffer)))
-     (w3m-list-buffers))))
+     buffers)))
+
+(defvar w3m-tab-menubar-make-items-precbuf nil)
+(defvar w3m-tab-menubar-make-items-prebuflst nil)
+(defvar w3m-tab-menubar-make-items-preurl nil)
+(defvar w3m-tab-menubar-make-items-preitems nil)
+
+(defun w3m-tab-menubar-force-update (&rest args)
+  (setq w3m-tab-menubar-make-items-preitems nil)
+  (w3m-tab-menubar-update))
+
+(add-hook 'w3m-display-functions 'w3m-tab-menubar-force-update)
+
+(defun w3m-tab-menubar-make-items (&optional nomenu)
+  "Create w3m tab menu items."
+  (let (menu buflst total max)
+    (if nomenu
+	(w3m-tab-menubar-make-items-1 (w3m-list-buffers) t)
+      (setq w3m-tab-button-menu-current-buffer (current-buffer))
+      (setq buflst (w3m-list-buffers))
+      (if (and w3m-tab-menubar-make-items-preitems
+	       (eq w3m-tab-button-menu-current-buffer
+		   w3m-tab-menubar-make-items-precbuf)
+	       (equal w3m-tab-menubar-make-items-prebuflst buflst)
+	       (equal w3m-tab-menubar-make-items-preurl w3m-current-url))
+	  w3m-tab-menubar-make-items-preitems
+	(setq w3m-tab-menubar-make-items-precbuf
+	      w3m-tab-button-menu-current-buffer)
+	(setq w3m-tab-menubar-make-items-prebuflst buflst)
+	(setq w3m-tab-menubar-make-items-preurl w3m-current-url)
+	(setq total (length buflst))
+	(setq max (- (frame-height (selected-frame))
+		     w3m-tab-menubar-items-sub-coeff))
+	(if (< total max)
+	    (setq menu (w3m-tab-menubar-make-items-1 buflst))
+	  (setq menu (list `(,(w3m-make-menu-item "タブの選択"
+						  "Select TAB")
+			     ,@(w3m-tab-menubar-make-items-1 buflst)))))
+	(setq w3m-tab-menubar-make-items-preitems
+	      (append menu
+		      '("-")
+		      '("-")
+		      (w3m-make-menu-commands
+		       w3m-tab-button-menu-commands)))))))
 
 (provide 'w3m-tabmenu)
 

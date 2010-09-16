@@ -1,6 +1,6 @@
 ;;; mime-w3m.el --- mime-view content filter for text
 
-;; Copyright (C) 2001, 2002, 2003, 2004, 2005
+;; Copyright (C) 2001, 2002, 2003, 2004, 2005, 2009
 ;; TSUCHIYA Masatoshi <tsuchiya@namazu.org>
 
 ;; Author: TSUCHIYA Masatoshi <tsuchiya@namazu.org>,
@@ -20,9 +20,9 @@
 ;; General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program; if not, you can either send email to this
-;; program's maintainer or write to: The Free Software Foundation,
-;; Inc.; 59 Temple Place, Suite 330; Boston, MA 02111-1307, USA.
+;; along with this program; see the file COPYING.  If not, write to
+;; the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
 
 
 ;;; Install:
@@ -128,7 +128,7 @@ by way of `post-command-hook'."
 	   (set-alist 'mime-view-type-subtype-score-alist
 		      '(text . html) 3))))))
 
-(defsubst mime-w3m-setup ()
+(defun mime-w3m-setup ()
   "Setup `mime-w3m' module."
   (require 'w3m)
   (when (eq mime-w3m-display-inline-images 'default)
@@ -146,30 +146,6 @@ by way of `post-command-hook'."
 	     (progn ,@body)
 	   (font-set-face-background 'default color (current-buffer))))
     (cons 'progn body)))
-
-(unless (or (featurep 'xemacs)
-	    (>= emacs-major-version 21))
-  (defvar mime-w3m-mode-map nil
-    "Keymap for text/html part rendered by `mime-w3m-preview-text/html'.
-This map is overwritten by `mime-w3m-local-map-property' based on the
-value of `w3m-minor-mode-map'.  Therefore, in order to add some
-commands to this map, add them to `w3m-minor-mode-map' instead of this
-map."))
-
-(eval-when-compile
-  (defvar mime-w3m-mode-map))
-
-(defsubst mime-w3m-local-map-property ()
-  (if (or (featurep 'xemacs)
-	  (>= emacs-major-version 21))
-      (list 'keymap w3m-minor-mode-map)
-    (list 'local-map
-	  (or mime-w3m-mode-map
-	      (progn
-		(setq mime-w3m-mode-map (copy-keymap w3m-minor-mode-map))
-		(set-keymap-parent mime-w3m-mode-map
-				   mime-view-mode-default-map)
-		mime-w3m-mode-map)))))
 
 ;;;###autoload
 (defun mime-w3m-preview-text/html (entity situation)
@@ -199,8 +175,8 @@ map."))
 			  (mime-entity-content-type entity)
 			  "charset"))
 	     (add-text-properties p (point-max)
-				  (nconc (mime-w3m-local-map-property)
-					 '(text-rendered-by-mime-w3m t))))
+				  (list 'keymap w3m-minor-mode-map
+					'text-rendered-by-mime-w3m t)))
 	 (error (message "%s" err)))))))
 
 (let (current-load-list)

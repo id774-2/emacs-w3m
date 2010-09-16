@@ -1,6 +1,6 @@
 ;;; w3m-antenna.el --- Utility to detect changes of WEB
 
-;; Copyright (C) 2001, 2002, 2003, 2004, 2005
+;; Copyright (C) 2001, 2002, 2003, 2004, 2005, 2007
 ;; TSUCHIYA Masatoshi <tsuchiya@namazu.org>
 
 ;; Authors: TSUCHIYA Masatoshi <tsuchiya@namazu.org>
@@ -19,9 +19,9 @@
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program; if not, you can either send email to this
-;; program's maintainer or write to: The Free Software Foundation,
-;; Inc.; 59 Temple Place, Suite 330; Boston, MA 02111-1307, USA.
+;; along with this program; see the file COPYING.  If not, write to
+;; the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
 
 
 ;;; Commentary:
@@ -108,25 +108,34 @@ that consists of:
 ")
 
 (defmacro w3m-antenna-site-key (site)
-  (` (car (, site))))
+  `(car ,site))
 (defmacro w3m-antenna-site-title (site)
-  (` (nth 1 (, site))))
+  `(nth 1 ,site))
 (defmacro w3m-antenna-site-class (site)
-  (` (nth 2 (, site))))
+  `(nth 2 ,site))
 (defmacro w3m-antenna-site-url (site)
-  (` (nth 3 (, site))))
+  `(nth 3 ,site))
 (defmacro w3m-antenna-site-last-modified (site)
-  (` (nth 4 (, site))))
+  `(nth 4 ,site))
 (defmacro w3m-antenna-site-size (site)
-  (` (nth 5 (, site))))
+  `(nth 5 ,site))
 (defmacro w3m-antenna-site-size-detected (site)
-  (` (nth 6 (, site))))
+  `(nth 6 ,site))
 
 (defcustom w3m-antenna-file
   (expand-file-name ".antenna" w3m-profile-directory)
   "File which has list of antenna URLs."
   :group 'w3m-antenna
   :type '(file :size 0))
+
+(defcustom w3m-antenna-refresh-interval nil
+  "Interval time to update (to refresh) the antenna page automatically.
+The value should be a positive integer in seconds, or nil which means
+not to update the page."
+  :group 'w3m-antenna
+  :type '(choice
+	  (const :tag "Not reload." nil)
+	  (integer :tag "Interval second.")))
 
 (defcustom w3m-antenna-sites
   (unless noninteractive
@@ -173,7 +182,7 @@ that consists of:
 (defcustom w3m-antenna-html-skelton
   (eval-when-compile
     (concat "<!doctype html public \"-//W3C//DTD HTML 3.2//EN\">\n"
-	    "<html>\n<head>\n<title>Antenna</title>\n</head>\n<body>\n"
+	    "<html>\n<head>\n<title>Antenna</title>\n%R</head>\n<body>\n"
 	    "<h1>Antenna</h1>\n<p align=\"right\">Checked at %D.</p>\n"
 	    "<h2>Updated</h2>\n<ul>\n%C</ul>\n"
 	    "<h2>Visited</h2>\n<ul>\n%U</ul>\n"
@@ -220,8 +229,13 @@ that consists of:
 (defun w3m-antenna-alist ()
   (let ((alist (w3m-load-list w3m-antenna-file)))
     (mapcar (lambda (site)
-	      (or (assoc (w3m-antenna-site-key site) alist)
-		  (append site (list nil nil nil nil))))
+	      (let ((l (assoc (w3m-antenna-site-key site) alist)))
+		(if l
+		    (progn
+		      (setf (w3m-antenna-site-class l)
+			    (w3m-antenna-site-class site))
+		      l)
+		  (append site (list nil nil nil nil)))))
 	    w3m-antenna-sites)))
 
 (defun w3m-antenna-hns-last-modified (url handler)
@@ -271,7 +285,7 @@ In order to use this function, `xml.el' is required."
 		(site site))
     (w3m-process-do-with-temp-buffer
 	(type (w3m-retrieve url nil t nil nil handler))
-      (let (link date dc-dates)
+      (let (link date dates)
 	(when type
 	  (w3m-decode-buffer url)
 	  (let* ((xml (ignore-errors
@@ -282,19 +296,40 @@ In order to use this function, `xml.el' is required."
 			  xml "http://purl.org/rss/1.0/"))
 		 (channel (car (w3m-rss-find-el
 				(intern (concat rss-ns "channel"))
-				xml))))
+				xml)))
+		 (items (w3m-rss-find-el
+			 (intern (concat rss-ns "item"))
+			 xml)))
 	    (setq link (nth 2 (car (w3m-rss-find-el
 				    (intern (concat rss-ns "link"))
 				    channel))))
-	    (setq dc-dates (w3m-rss-find-el
-			    (intern (concat dc-ns "date"))
-			    channel))
-	    (when dc-dates
-	      (setq date '(0 0))
-	      (dolist (tmp dc-dates)
-		(setq tmp (w3m-rss-parse-date-string (nth 2 tmp)))
-		(when (w3m-time-newer-p tmp date)
-		  (setq date tmp))))))
+	    (setq dates (append
+			 (w3m-rss-find-el
+			  (intern (concat dc-ns "date"))
+			  channel)
+			 (w3m-rss-find-el
+			  (intern (concat dc-ns "date"))
+			  items)
+			 (w3m-rss-find-el 'pubDate channel)
+			 (w3m-rss-find-el 'pubDate items)))
+	    (when dates
+	      ;; Ignore future entries to display site announcements.
+	      (let ((now (current-time)))
+		(let ((low (+ (nth 1 now) 3600))) ; 3600 = clock skew margin
+		  (setq now
+			(if (>= low 65536)
+			    (list (1+ (car now))
+				  (- low 65536)
+				  (nth 2 now))
+			  (list (car now)
+				low
+				(nth 2 now)))))
+		(setq date '(0 0))
+		(dolist (tmp dates)
+		  (setq tmp (w3m-rss-parse-date-string (nth 2 tmp)))
+		  (and (w3m-time-newer-p tmp date)
+		       (w3m-time-newer-p now tmp)
+		       (setq date tmp)))))))
 	(if (and link date)
 	    (w3m-antenna-site-update site link date nil)
 	  (w3m-antenna-check-page site handler))))))
@@ -413,11 +448,10 @@ a list of the results."
 	    (incf index)
 	    (funcall function
 		     element
-		     (let ((var (make-symbol "tmpvar")))
-		       (cons `(lambda (x)
-				(aset ,table ,index x)
-				(w3m-antenna-mapcar-after ,table ,buffer))
-			     handler)))))
+		     (cons `(lambda (x)
+			      (aset ,table ,index x)
+			      (w3m-antenna-mapcar-after ,table ,buffer))
+			   handler))))
     (w3m-antenna-mapcar-after (symbol-value table) (symbol-value buffer))))
 
 (defun w3m-antenna-mapcar-after (result buffer)
@@ -514,7 +548,16 @@ asynchronous process that has not finished yet."
 	(insert (let ((time (nth 5 (file-attributes w3m-antenna-file))))
 		  (if time
 		      (current-time-string time)
-		    "(unknown)"))))))))
+		    "(unknown)"))))
+       ((eq c '?R)
+	(save-restriction
+	  (narrow-to-region (match-beginning 0) (match-end 0))
+	  (delete-region (point-min) (point-max))
+	  (when (and w3m-antenna-refresh-interval
+		     (integerp w3m-antenna-refresh-interval)
+		     (< 0 w3m-antenna-refresh-interval))
+	    (insert (format "<META HTTP-EQUIV=\"Refresh\" CONTENT=\"%d\">\n"
+			    w3m-antenna-refresh-interval)))))))))
 
 ;;;###autoload
 (defun w3m-about-antenna (url &optional no-decode no-cache

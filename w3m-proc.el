@@ -1,6 +1,6 @@
 ;;; w3m-proc.el --- Functions and macros to control sub-processes
 
-;; Copyright (C) 2001, 2002, 2003, 2004, 2005
+;; Copyright (C) 2001, 2002, 2003, 2004, 2005, 2007, 2008, 2009, 2010
 ;; TSUCHIYA Masatoshi <tsuchiya@namazu.org>
 
 ;; Authors: TSUCHIYA Masatoshi <tsuchiya@namazu.org>,
@@ -26,9 +26,9 @@
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program; if not, you can either send email to this
-;; program's maintainer or write to: The Free Software Foundation,
-;; Inc.; 59 Temple Place, Suite 330; Boston, MA 02111-1307, USA.
+;; along with this program; see the file COPYING.  If not, write to
+;; the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
 
 ;;; Commentary:
 
@@ -41,23 +41,7 @@
 (eval-when-compile
   (require 'cl))
 
-;; Silence the byte compiler complaining against `gensym'.
-(eval-when-compile
-  (defvar byte-compile-cl-functions nil)
-  (when (consp byte-compile-cl-functions)
-    (setq byte-compile-cl-functions
-	  (delq 'gensym byte-compile-cl-functions))))
-
 (require 'w3m-util)
-
-(eval-and-compile
-  (cond ((boundp 'MULE)
-	 (autoload 'read-passwd "w3m-om"))
-	((= emacs-major-version 19)
-	 (autoload 'read-passwd "w3m-19"))
-	((boundp 'header-line-format)
-	 (autoload 'w3m-force-window-update
-	   (format "w3m-e%d" emacs-major-version)))))
 
 (eval-when-compile
   ;; Variable(s) which are used in the following inline functions.
@@ -73,7 +57,13 @@
   (defvar w3m-async-exec)
   (defvar w3m-process-connection-type)
   (defvar w3m-process-modeline-format)
-  (defvar w3m-work-buffer-list))
+  (defvar w3m-work-buffer-list)
+  (autoload 'w3m-idle-images-show-unqueue "w3m"))
+
+;; Silence the Emacs' byte-compiler that says ``might not be defined''.
+(eval-when-compile
+  (defun w3m-decode-coding-string-with-priority (str coding)
+    ()))
 
 (defvar w3m-process-inhibit-quit t
   "`w3m-process-sentinel' binds `inhibit-quit' according to this variable.")
@@ -104,7 +94,8 @@
 
 (defvar w3m-process-proxy-user nil "User name of the proxy server.")
 (defvar w3m-process-proxy-passwd nil "Password of the proxy server.")
-
+(defvar w3m-process-ssl-passphrase nil
+  "Passphrase for the client certificate.")
 
 (defmacro w3m-process-with-coding-system (&rest body)
   "Set coding systems for `w3m-command', and evaluate BODY."
@@ -145,7 +136,7 @@
 (put 'w3m-process-with-environment 'lisp-indent-function 1)
 (put 'w3m-process-with-environment 'edebug-form-spec '(form body))
 
-(defsubst w3m-process-p (object)
+(defun w3m-process-p (object)
   "Return t if OBJECT is a `w3m-process' object."
   (and (consp object)
        (vectorp (cdr object))
@@ -196,7 +187,7 @@ return it."
     (with-current-buffer (w3m-process-buffer x)
       (setq w3m-process-object x))))
 
-(defsubst w3m-process-kill-process (process)
+(defun w3m-process-kill-process (process)
   "Kill process PROCESS safely."
   (when (processp process)
     (set-process-filter process 'ignore)
@@ -242,14 +233,7 @@ generated asynchronous process is ignored.  Otherwise,
 (defun w3m-process-kill-stray-processes ()
   "Kill stray processes."
   (dolist (obj w3m-process-queue)
-    (if (buffer-name (w3m-process-buffer obj))
-	(save-excursion
-	  (set-buffer (w3m-process-buffer obj))
-	  (dolist (x (w3m-process-handlers w3m-process-object))
-	    (unless (buffer-name (w3m-process-handler-parent-buffer x))
-	      (setq w3m-process-queue (delq obj w3m-process-queue))
-	      (when (w3m-process-process obj)
-		(w3m-process-kill-process (w3m-process-process obj))))))
+    (unless (buffer-name (w3m-process-buffer obj))
       (setq w3m-process-queue (delq obj w3m-process-queue))
       (when (w3m-process-process obj)
 	(w3m-process-kill-process (w3m-process-process obj))))))
@@ -314,15 +298,7 @@ which have no handler."
     (with-current-buffer buffer
       (setq w3m-current-process nil)))
   (w3m-process-start-queued-processes)
-  (w3m-static-when (boundp 'header-line-format)
-    ;; Redisplay the header-line.
-    (run-at-time 0.5 nil
-		 (lambda (buffer)
-		   (if (and (buffer-live-p buffer)
-			    (eq (get-buffer-window buffer t)
-				(selected-window)))
-		       (w3m-force-window-update)))
-		 buffer)))
+  (w3m-force-window-update-later buffer))
 
 (defun w3m-process-shutdown ()
   (let ((list w3m-process-queue))
@@ -351,7 +327,7 @@ handler."
 (put 'w3m-process-timeout 'error-conditions '(error w3m-process-timeout))
 (put 'w3m-process-timeout 'error-message "Time out")
 
-(defsubst w3m-process-error-handler (error-data process)
+(defun w3m-process-error-handler (error-data process)
   (setq w3m-process-queue (delq process w3m-process-queue))
   (w3m-process-kill-process (w3m-process-process process))
   (signal (car error-data) (cdr error-data)))
@@ -367,7 +343,7 @@ otherwise returns nil."
     (let ((start (current-time)))
       (while (or (and (prog2
 			  (discard-input)
-			  (not (sit-for 1))
+			  (not (save-current-buffer (sit-for 0.1)))
 			(discard-input))
 		      ;; Some input is detected but it may be a key
 		      ;; press event which should be ignored when the
@@ -545,13 +521,19 @@ evaluated in a temporary buffer."
 	  (string-as-multibyte (format "%s" exit-status)))
     nil)))
 
+(defvar w3m-process-background nil
+  "Non-nil means that an after handler is being evaluated.")
+
 (defun w3m-process-sentinel (process event &optional ignore-queue)
   ;; Ensure that this function will be never called repeatedly.
   (set-process-sentinel process 'ignore)
-  (let ((inhibit-quit w3m-process-inhibit-quit))
+  (let ((inhibit-quit w3m-process-inhibit-quit)
+	(w3m-process-background t))
     (unwind-protect
 	(if (buffer-name (process-buffer process))
 	    (with-current-buffer (process-buffer process)
+	      (w3m-static-unless (featurep 'xemacs)
+		(accept-process-output process 1))
 	      (setq w3m-process-queue
 		    (delq w3m-process-object w3m-process-queue))
 	      (let ((exit-status (process-exit-status process))
@@ -562,12 +544,16 @@ evaluated in a temporary buffer."
 		    (obj    w3m-process-object))
 		(setq w3m-process-object nil)
 		(dolist (x (w3m-process-handlers obj))
-		  (when (buffer-name (w3m-process-handler-buffer x))
+		  (when (and
+			 (buffer-name (w3m-process-handler-buffer x))
+			 (buffer-name (w3m-process-handler-parent-buffer x)))
 		    (set-buffer (w3m-process-handler-buffer x))
 		    (unless (eq buffer (current-buffer))
-		      (insert-buffer buffer))))
+		      (insert-buffer-substring buffer))))
 		(dolist (x (w3m-process-handlers obj))
-		  (when (buffer-name (w3m-process-handler-buffer x))
+		  (when (and
+			 (buffer-name (w3m-process-handler-buffer x))
+			 (buffer-name (w3m-process-handler-parent-buffer x)))
 		    (set-buffer (w3m-process-handler-buffer x))
 		    (let ((w3m-process-exit-status)
 			  (w3m-current-buffer
@@ -597,7 +583,7 @@ evaluated in a temporary buffer."
 (defun w3m-process-filter (process string)
   (when (buffer-name (process-buffer process))
     (with-current-buffer (process-buffer process)
-      (let ((buffer-read-only nil)
+      (let ((inhibit-read-only t)
 	    (case-fold-search nil))
 	(goto-char (process-mark process))
 	(insert string)
@@ -605,16 +591,20 @@ evaluated in a temporary buffer."
 	(unless (string= "" string)
 	  (goto-char (point-min))
 	  (cond
-	   ((and (looking-at "\\(Accept [^\n]+\n\\)*\\([^\n]+: accept\\? \\)(y/n)")
+	   ((and (looking-at
+		  "\\(?:Accept [^\n]+\n\\)*\\([^\n]+: accept\\? \\)(y/n)")
 		 (= (match-end 0) (point-max)))
 	    ;; SSL certificate
 	    (message "")
-	    (let ((yn (w3m-process-y-or-n-p w3m-current-url (match-string 2))))
+	    (let ((yn (w3m-process-y-or-n-p w3m-current-url (match-string 1))))
 	      (ignore-errors
 		(process-send-string process (if yn "y\n" "n\n"))
 		(delete-region (point-min) (point-max)))))
-	   ((and (looking-at
-		  "\\(\n?Wrong username or password\n\\)?Proxy Username for \\(.*\\): Proxy Password: ")
+	   ((and (looking-at "\n?Accept unsecure SSL session:.*\n")
+		 (= (match-end 0) (point-max)))
+	    (delete-region (point-min) (point-max)))
+	   ((and (looking-at "\\(\n?Wrong username or password\n\\)?\
+Proxy Username for \\(?:.*\\): Proxy Password: ")
 		 (= (match-end 0) (point-max)))
 	    (when (or (match-beginning 1)
 		      (not (stringp w3m-process-proxy-passwd)))
@@ -624,8 +614,8 @@ evaluated in a temporary buffer."
 	      (process-send-string process
 				   (concat w3m-process-proxy-passwd "\n"))
 	      (delete-region (point-min) (point-max))))
-	   ((and (looking-at
-		  "\\(\n?Wrong username or password\n\\)?Proxy Username for \\(.*\\): ")
+	   ((and (looking-at "\\(\n?Wrong username or password\n\\)?\
+Proxy Username for \\(.*\\): ")
 		 (= (match-end 0) (point-max)))
 	    (when (or (match-beginning 1)
 		      (not (stringp w3m-process-proxy-user)))
@@ -636,8 +626,8 @@ evaluated in a temporary buffer."
 	    (ignore-errors
 	      (process-send-string process
 				   (concat w3m-process-proxy-user "\n"))))
-	   ((and (looking-at
-		  "\\(\n?Wrong username or password\n\\)?Username for [^\n]*\n?: Password: ")
+	   ((and (looking-at "\\(\n?Wrong username or password\n\\)?\
+Username for [^\n]*\n?: Password: ")
 		 (= (match-end 0) (point-max)))
 	    (when (or (match-beginning 1)
 		      (not (stringp w3m-process-passwd)))
@@ -650,10 +640,11 @@ evaluated in a temporary buffer."
 	      (process-send-string process
 				   (concat w3m-process-passwd "\n"))
 	      (delete-region (point-min) (point-max))))
-	   ((and (looking-at
-		  "\\(\n?Wrong username or password\n\\)?Username for \\(.*\\)\n?: ")
+	   ((and (looking-at "\\(\n?Wrong username or password\n\\)?\
+Username for \\(.*\\)\n?: ")
 		 (= (match-end 0) (point-max)))
-	    (setq w3m-process-realm (match-string 2))
+	    (setq w3m-process-realm (w3m-decode-coding-string-with-priority
+				     (match-string 2) nil))
 	    (when (or (match-beginning 1)
 		      (not (stringp w3m-process-user)))
 	      (setq w3m-process-user
@@ -663,13 +654,22 @@ evaluated in a temporary buffer."
 	    (ignore-errors
 	      (process-send-string process
 				   (concat w3m-process-user "\n"))))
+	   ((and (looking-at "Enter PEM pass phrase:")
+		 (= (match-end 0) (point-max)))
+	    (unless (stringp w3m-process-ssl-passphrase)
+	      (setq w3m-process-ssl-passphrase
+		    (read-passwd "PEM pass phrase: ")))
+	    (ignore-errors
+	      (process-send-string process
+				   (concat w3m-process-ssl-passphrase "\n"))
+	      (delete-region (point-min) (point-max))))
 	   ((progn
 	      (or (search-forward "\nW3m-current-url:" nil t)
 		  (goto-char (process-mark process)))
 	      (re-search-backward
-	       "^W3m-\\(in-\\)?progress: \\([.0-9]+/[.0-9]+[a-zA-Z]?b\\)$"
+	       "^W3m-\\(?:in-\\)?progress: \\([.0-9]+/[.0-9]+[a-zA-Z]?b\\)$"
 	       nil t))
-	    (let ((str (w3m-process-modeline-format (match-string 2)))
+	    (let ((str (w3m-process-modeline-format (match-string 1)))
 		  (buf))
 	      (save-current-buffer
 		(dolist (handler (w3m-process-handlers w3m-process-object))
@@ -760,23 +760,41 @@ evaluated in a temporary buffer."
 NOTE: This function is designed to avoid annoying questions.  So when
 the same questions is reasked, its previous answer is reused without
 prompt."
-  (let (elem answer (root (w3m-get-server-hostname url)))
-    (if (setq elem (assoc root w3m-process-accept-alist))
-	(if (member prompt (cdr elem))
-	    ;; When the same question has been asked, the previous
-	    ;; answer is reused.
-	    (setq answer t)
-	  ;; When any question for the same server has been asked,
-	  ;; regist the pair of this question and its answer to
-	  ;; `w3m-process-accept-alist'.
-	  (when (setq answer (y-or-n-p prompt))
-	    (setcdr elem (cons prompt (cdr elem)))))
-      ;; When no question for the same server has been asked, regist
-      ;; the 3-tuple of the server, the question and its answer to
-      ;; `w3m-process-accept-alist'.
-      (when (setq answer (y-or-n-p prompt))
-	(push (cons root (list prompt)) w3m-process-accept-alist)))
-    answer))
+  (let ((root (w3m-get-server-hostname url))
+	(map (copy-keymap query-replace-map))
+	elem answer)
+    ;; ignore [space] to avoid answering y without intention.
+    (define-key map " " 'ignore)
+    (let ((query-replace-map map))
+      (if (setq elem (assoc root w3m-process-accept-alist))
+	  (if (member prompt (cdr elem))
+	      ;; When the same question has been asked, the previous
+	      ;; answer is reused.
+	      (setq answer t)
+	    ;; When any question for the same server has been asked,
+	    ;; regist the pair of this question and its answer to
+	    ;; `w3m-process-accept-alist'.
+	    (when (setq answer (y-or-n-p prompt))
+	      (setcdr elem (cons prompt (cdr elem)))))
+	;; When no question for the same server has been asked, regist
+	;; the 3-tuple of the server, the question and its answer to
+	;; `w3m-process-accept-alist'.
+	(when (setq answer (y-or-n-p prompt))
+	  (push (cons root (list prompt)) w3m-process-accept-alist)))
+      answer)))
+
+;; Silence the byte compiler complaining against `gensym' like:
+;; "Warning: the function `gensym' might not be defined at runtime."
+(eval-when-compile
+  (and (boundp 'byte-compile-unresolved-functions)
+       (fboundp 'gensym)
+       (symbol-file 'gensym)
+       (string-match "/cl-macs\\.el[^/]*\\'" (symbol-file 'gensym))
+       (condition-case nil
+	   (setq byte-compile-unresolved-functions
+		 (delq (assq 'gensym byte-compile-unresolved-functions)
+		       byte-compile-unresolved-functions))
+	 (error))))
 
 (provide 'w3m-proc)
 

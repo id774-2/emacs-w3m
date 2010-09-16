@@ -1,6 +1,7 @@
 ;;; w3m-dtree.el --- The add-on program to display local directory tree.
 
-;; Copyright (C) 2001, 2002, 2003 TSUCHIYA Masatoshi <tsuchiya@namazu.org>
+;; Copyright (C) 2001, 2002, 2003, 2005, 2006, 2007, 2009
+;; TSUCHIYA Masatoshi <tsuchiya@namazu.org>
 
 ;; Author: Hideyuki SHIRAI    <shirai@meadowy.org>,
 ;;         TSUCHIYA Masatoshi <tsuchiya@namazu.org>
@@ -17,9 +18,9 @@
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program; if not, you can either send email to this
-;; program's maintainer or write to: The Free Software Foundation,
-;; Inc.; 59 Temple Place, Suite 330; Boston, MA 02111-1307, USA.
+;; along with this program; see the file COPYING.  If not, write to
+;; the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
 
 
 ;;; Commentary:
@@ -61,33 +62,29 @@ If you care for another style, set manually and try it :-).
   :group 'w3m
   :type '(radio
 	  (const :format "ASCII: " ["|-" "+-" "|  " "   "])
-	  (list
-	   :convert-widget
-	   (lambda (widget)
-	     (require 'w3m)
-	     (let ((defaults (if (equal w3m-language "Japanese")
-				 (vconcat
-				  (mapcar
-				   (lambda (s)
-				     (decode-coding-string s 'iso-2022-7bit))
-				   '("\e$B('\e(B" "\e$B(&\e(B"
-				     "\e$B(\"\e(B" "\e$B!!\e(B")))
-			       ["|-" "+-" "|  " "   "])))
-	       `(vector
-		 :format "Others:\n%v" :indent 4
-		 :args
-		 ((string :format "%{|-%}          %v\n"
-			  :sample-face widget-field-face :size 0
-			  :value ,(aref defaults 0))
-		  (string :format "%{+-%}          %v\n"
-			  :sample-face widget-field-face :size 0
-			  :value ,(aref defaults 1))
-		  (string :format "%{|  %}         %v\n"
-			  :sample-face widget-field-face :size 0
-			  :value ,(aref defaults 2))
-		  (string :format "%{   %}         %v"
-			  :sample-face widget-field-face :size 0
-			  :value ,(aref defaults 3)))))))))
+	  (vector
+	   :convert-widget w3m-widget-type-convert-widget
+	   (let ((defaults (if (equal w3m-language "Japanese")
+			       (vconcat
+				(mapcar
+				 (lambda (s)
+				   (decode-coding-string s 'iso-2022-7bit))
+				 '("\e$B('\e(B" "\e$B(&\e(B"
+				   "\e$B(\"\e(B" "\e$B!!\e(B")))
+			     ["|-" "+-" "|  " "   "])))
+	     `(:format "Others:\n%v" :indent 4
+		       (string :format "%{|-%}          %v\n"
+			       :sample-face widget-field-face :size 0
+			       :value ,(aref defaults 0))
+		       (string :format "%{+-%}          %v\n"
+			       :sample-face widget-field-face :size 0
+			       :value ,(aref defaults 1))
+		       (string :format "%{|  %}         %v\n"
+			       :sample-face widget-field-face :size 0
+			       :value ,(aref defaults 2))
+		       (string :format "%{   %}         %v"
+			       :sample-face widget-field-face :size 0
+			       :value ,(aref defaults 3)))))))
 
 (defcustom w3m-dtree-stop-strings ["|=" "+="]
   "*Vector of strings to be used for indentation when a depth of directory
@@ -96,28 +93,24 @@ over the 'w3m-dtree-directory-depth'."
   :type '(radio
 	  (const :format "ASCII: " ["|=" "+="])
 	  (const :format "ASCII Bold: " ["<b>|-</b>" "<b>+-</b>"])
-	  (list
-	   :convert-widget
-	   (lambda (widget)
-	     (require 'w3m)
-	     (let ((defaults (if (equal w3m-language "Japanese")
-				 (vconcat
-				  (mapcar
-				   (lambda (s)
-				     (decode-coding-string s 'iso-2022-7bit))
-				   '("\e$B(<\e(B" "\e$B(1\e(B")))
-			       ["|=" "+="])))
-	       `(vector
-		 :format "Others:\n%v" :indent 4
-		 :args
-		 ((string :format "|=          %{|=%}              %v\n"
-			  :sample-face bold :size 0
-			  :value ,(aref defaults 0))
-		  (string :format "+=          %{+=%}              %v\n"
-			  :sample-face bold :size 0
-			  :value ,(aref defaults 1)))))))))
+	  (vector
+	   :convert-widget w3m-widget-type-convert-widget
+	   (let ((defaults (if (equal w3m-language "Japanese")
+			       (vconcat
+				(mapcar
+				 (lambda (s)
+				   (decode-coding-string s 'iso-2022-7bit))
+				 '("\e$B(<\e(B" "\e$B(1\e(B")))
+			     ["|=" "+="])))
+	     `(:format "Others:\n%v" :indent 4
+		       (string :format "|=          %{|=%}              %v\n"
+			       :sample-face bold :size 0
+			       :value ,(aref defaults 0))
+		       (string :format "+=          %{+=%}              %v\n"
+			       :sample-face bold :size 0
+			       :value ,(aref defaults 1)))))))
 
-(defsubst w3m-dtree-expand-file-name (path)
+(defun w3m-dtree-expand-file-name (path)
   (if (string-match "^\\(.\\):\\(.*\\)" path)
       (if w3m-use-cygdrive
 	  (concat "/cygdrive/"
@@ -125,20 +118,22 @@ over the 'w3m-dtree-directory-depth'."
 	(concat "/" (match-string 1 path) "|" (match-string 2 path)))
     path))
 
-(defsubst w3m-dtree-directory-name (path)
+(defun w3m-dtree-directory-name (path)
   (when (and w3m-treat-drive-letter
-	     (string-match "^/\\(\\([A-Za-z]\\)[|:]?\\|cygdrive/\\([A-Za-z]\\)\\)/" path))
+	     (string-match
+	      "^/\\(?:\\([A-Za-z]\\)[|:]?\\|cygdrive/\\([A-Za-z]\\)\\)/"
+	      path))
     (setq path (concat
-		(or (match-string 2 path)
-		    (match-string 3 path))
+		(or (match-string 1 path)
+		    (match-string 2 path))
 		":/"
 		(substring path (match-end 0)))))
   path)
 
 (defmacro w3m-dtree-has-child (path)
-  (` (let ((w32-get-true-file-link-count t)) ;; true link count for Meadow
-       (and (nth 1 (file-attributes (, path)))
-	    (/= (nth 1 (file-attributes (, path))) 2)))))
+  `(let ((w32-get-true-file-link-count t)) ;; true link count for Meadow
+     (and (nth 1 (file-attributes ,path))
+	  (/= (nth 1 (file-attributes ,path)) 2))))
 
 (defun w3m-dtree-create-sub (path allfiles dirprefix fileprefix indent depth)
   (let* ((files (directory-files path t))
@@ -212,10 +207,10 @@ over the 'w3m-dtree-directory-depth'."
 	(dirprefix "about://dtree")
 	(fileprefix "file://")
 	path)
-    (if (string-match "\\?allfiles=\\(\\(true\\)\\|false\\)$" url)
+    (if (string-match "\\?allfiles=\\(?:\\(true\\)\\|false\\)$" url)
 	(progn
 	  (setq path (substring url prelen (match-beginning 0)))
-	  (if (match-beginning 2) (setq allfiles t)))
+	  (if (match-beginning 1) (setq allfiles t)))
       (if w3m-dtree-default-allfiles
 	  (setq allfiles (not allfiles)))
       (setq path (substring url prelen)))

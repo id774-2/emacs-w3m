@@ -1,6 +1,6 @@
 ;;; w3m-ucs.el --- CCL programs to process Unicode.
 
-;; Copyright (C) 2001 TSUCHIYA Masatoshi <tsuchiya@namazu.org>
+;; Copyright (C) 2001, 2005, 2007 TSUCHIYA Masatoshi <tsuchiya@namazu.org>
 
 ;; Authors: TSUCHIYA Masatoshi <tsuchiya@namazu.org>,
 ;;          ARISAWA Akihiro <ari@mbf.sphere.ne.jp>
@@ -19,9 +19,9 @@
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program; if not, you can either send email to this
-;; program's maintainer or write to: The Free Software Foundation,
-;; Inc.; 59 Temple Place, Suite 330; Boston, MA 02111-1307, USA.
+;; along with this program; see the file COPYING.  If not, write to
+;; the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
 
 ;;; Commentary:
 
@@ -35,18 +35,19 @@
 ;;    ftp://ftp.m17n.org/pub/mule/Mule-UCS/
 
 ;;; Code:
+
+;; Enable XEmacs 21.5-Mule to compile this module anyway.
+(eval-when-compile
+  (if (featurep 'xemacs)
+      (let ((mucs-ignore-version-incompatibilities t))
+	(defvar font-ccl-encoder-alist nil)
+	(require 'un-define))))
+
 (require 'un-define)
 (require 'w3m-ccl)
 
 (eval-and-compile
-  (autoload 'w3m-make-ccl-coding-system
-    (cond
-     ((featurep 'xemacs)
-      "w3m-xmas")
-     ((> emacs-major-version 20)
-      "w3m-e21")
-     ((= emacs-major-version 20)
-      "w3m-e20"))))
+  (autoload 'w3m-make-ccl-coding-system "w3m"))
 
 (defun w3m-ucs-to-char (codepoint)
   (condition-case nil

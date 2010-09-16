@@ -1,6 +1,7 @@
 ;;; w3m-image.el --- Image conversion routines.
 
-;; Copyright (C) 2001, 2002, 2003 TSUCHIYA Masatoshi <tsuchiya@namazu.org>
+;; Copyright (C) 2001, 2002, 2003, 2005, 2007, 2008
+;; TSUCHIYA Masatoshi <tsuchiya@namazu.org>
 
 ;; Authors: Yuuichi Teranishi  <teranisi@gohome.org>
 ;; Keywords: w3m, WWW, hypermedia
@@ -18,9 +19,9 @@
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program; if not, you can either send email to this
-;; program's maintainer or write to: The Free Software Foundation,
-;; Inc.; 59 Temple Place, Suite 330; Boston, MA 02111-1307, USA.
+;; along with this program; see the file COPYING.  If not, write to
+;; the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
 
 
 ;;; Commentary:
@@ -56,23 +57,84 @@
   (defvar w3m-work-buffer-name)
   (defvar w3m-work-buffer-list))
 
-(defcustom w3m-imagick-convert-program (w3m-which-command "convert")
+(defcustom w3m-imagick-convert-program (if noninteractive
+					   nil
+					 (w3m-which-command "convert"))
   "*Program name of ImageMagick's `convert'."
   :group 'w3m
-  :type '(string :size 0))
+  :set (lambda (symbol value)
+	 (custom-set-default symbol (if (and (not noninteractive)
+					     value)
+					(if (file-name-absolute-p value)
+					    (if (file-executable-p value)
+						value)
+					  (w3m-which-command value)))))
+  :type 'file)
+
+(defcustom w3m-imagick-identify-program (if noninteractive
+					    nil
+					  (w3m-which-command "identify"))
+  "*Program name of ImageMagick's `identify'."
+  :group 'w3m
+  :set (lambda (symbol value)
+	 (custom-set-default symbol (if (and (not noninteractive)
+					     value)
+					(if (file-name-absolute-p value)
+					    (if (file-executable-p value)
+						value)
+					  (w3m-which-command value)))))
+  :type 'file)
 
 ;;; Image handling functions.
 (defcustom w3m-resize-images (and w3m-imagick-convert-program t)
   "*If non-nil, resize images to the specified width and height."
   :group 'w3m
+  :set (lambda (symbol value)
+	 (custom-set-default symbol (and w3m-imagick-convert-program value)))
   :type 'boolean)
+
+(put 'w3m-imagick-convert-program 'available-p 'unknown)
+
+(defun w3m-imagick-convert-program-available-p ()
+  "Return non-nil if ImageMagick's `convert' program is available.
+If not, `w3m-imagick-convert-program' and `w3m-resize-images' are made
+nil forcibly."
+  (cond ((eq (get 'w3m-imagick-convert-program 'available-p) 'yes)
+	 t)
+	((eq (get 'w3m-imagick-convert-program 'available-p) 'no)
+	 nil)
+	((and (stringp w3m-imagick-convert-program)
+	      (file-executable-p w3m-imagick-convert-program))
+	 (put 'w3m-imagick-convert-program 'available-p 'yes)
+	 ;; Check whether convert supports png32.
+	 (put 'w3m-imagick-convert-program 'png32
+	      (unless (or (featurep 'xemacs)
+			  (< emacs-major-version 22))
+		(with-temp-buffer
+		  (set-buffer-multibyte nil)
+		  (insert "P1 1 1 1")
+		  (condition-case nil
+		      (call-process-region (point-min) (point-max)
+					   w3m-imagick-convert-program
+					   t t nil "pbm:-" "png32:-")
+		    (error))
+		  (goto-char (point-min))
+		  (looking-at "\211PNG\r\n"))))
+	 t)
+	(t
+	 (when w3m-imagick-convert-program
+	   (message "ImageMagick's `convert' program is not available")
+	   (sit-for 1))
+	 (setq w3m-imagick-convert-program nil
+	       w3m-resize-images nil)
+	 (put 'w3m-imagick-convert-program 'available-p 'no)
+	 nil)))
 
 ;;; Synchronous image conversion.
 (defun w3m-imagick-convert-buffer (from-type to-type &rest args)
-  (when w3m-imagick-convert-program
+  (when (w3m-imagick-convert-program-available-p)
     (let* ((in-file (make-temp-name
 		     (expand-file-name "w3mel" w3m-profile-directory)))
-	   (file-coding-system 'binary)
 	   (buffer-file-coding-system 'binary)
 	   (coding-system-for-read 'binary)
 	   (coding-system-for-write 'binary)
@@ -80,17 +142,22 @@
 	   return)
       (write-region (point-min) (point-max) in-file nil 'nomsg)
       (erase-buffer)
-      (setq return (apply 'call-process
-			  w3m-imagick-convert-program
-			  nil t nil
-			  (append args (list
-					(concat
-					 (if from-type
-					     (concat from-type ":"))
-					 in-file)
-					(if to-type
-					    (concat to-type ":-")
-					  "-")))))
+      (setq return
+	    (apply 'call-process
+		   w3m-imagick-convert-program
+		   nil t nil
+		   (append args (list
+				 (concat
+				  (if from-type
+				      (concat from-type ":"))
+				  in-file)
+				 (if to-type
+				     (if (and (string-equal to-type "png")
+					      (get 'w3m-imagick-convert-program
+						   'png32))
+					 "png32:-"
+				       (concat to-type ":-"))
+				   "-")))))
       (when (file-exists-p in-file) (delete-file in-file))
       (if (and (numberp return)
 	       (zerop return))
@@ -113,7 +180,7 @@
 (defun w3m-imagick-start-convert-data (handler
 				       data from-type to-type &rest args)
   (w3m-process-do-with-temp-buffer
-      (success (progn
+      (success (when (w3m-imagick-convert-program-available-p)
 		 (set-buffer-multibyte nil)
 		 (insert data)
 		 (apply 'w3m-imagick-start-convert-buffer
@@ -127,27 +194,30 @@
 			  (expand-file-name "w3mel" w3m-profile-directory)))
 		(out-buffer (current-buffer)))
     (setq w3m-current-url "non-existent")
-    (let ((file-coding-system 'binary)
-	  (coding-system-for-write 'binary)
+    (let ((coding-system-for-write 'binary)
 	  (buffer-file-coding-system 'binary)
 	  jka-compr-compression-info-list
-	  jam-zcat-filename-list
 	  format-alist)
       (write-region (point-min) (point-max) in-file nil 'nomsg))
     (w3m-process-do
 	(success (with-current-buffer out-buffer
 		   (erase-buffer)
-		   (w3m-process-start handler
-				      w3m-imagick-convert-program
-				      (append args
-					      (list
-					       (concat
-						(if from-type
-						    (concat from-type ":"))
-						in-file)
-					       (if to-type
-						   (concat to-type ":-")
-						 "-"))))))
+		   (w3m-process-start
+		    handler
+		    w3m-imagick-convert-program
+		    (append args
+			    (list
+			     (concat
+			      (if from-type
+				  (concat from-type ":"))
+			      in-file)
+			     (if to-type
+				 (if (and (string-equal to-type "png")
+					  (get 'w3m-imagick-convert-program
+					       'png32))
+				     "png32:-"
+				   (concat to-type ":-"))
+			       "-"))))))
       (when (file-exists-p in-file)
 	(delete-file in-file))
       success)))
